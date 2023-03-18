@@ -4,6 +4,8 @@
 
 - [Methodology](#methodology)
 - [Adaptations](#adaptations)
+  - [Adaptations in Minimap2](#adaptations_in_minimap2)
+  - [Adaptations in GACT-X](#adaptations_in_gactx)
 - [Instructions](#instructions)
 - [Citing This Work](#citation_self)
 - [Citing Minimap2](#citation_Minimap2)
@@ -11,9 +13,30 @@
 
 ## <a name="methodology"></a>Methodology
 
+Minimap2 is the State-of-the-Art tool for long-read assembly and runs entirely on software with SSE optimization (see reference on [Citing Minimap2](#citation_Minimap2)). GACT-X is an AWS cloud FPGA design for the SWG biological sequence alignment algorithm (see reference on [Citing Darwin-WGA](#citation_Darwin_WGA)). SWG is used in Minimap2 with SSE instructions. This work proposes a substitution of the `ksw_extd2_sse` function in Minimap2 for the GACT-X application for acceleration purposes. An integrated system was elaborated to support the multithreading (1 to 8) and multi-kernel (1 to 2) capacity of the f1.2xlarge instance. For more information, please check the reference in [Citing This Work](#citation_self).
+
 ## <a name="adaptations"></a>Adaptations
 
-* changed
+### <a name="adaptations_in_minimap2"></a>Adaptations in Minimap2
+
+- added `CMakeLists.txt` to create a new MakeFile that compiles Minimap2 with the GACT-X host
+- added lines in `align.c` to call the GACT-X host and coordinate kernel availability and thread queue
+- added new file `gactx.cpp` to host GACT-X with setup, cleanup and application fucntions
+- changed to `main.cpp` and added line for GACT-X host variables
+
+### <a name="adaptations_in_gactx"></a>Adaptations in GACT-X
+
+- changed internal wire sizes to support tile size of 8000 in Verilog files
+- changed `create_xo.sh` script to generate only GACT-X
+- changed `create_xo.sh` script to VIVADO 2018.2
+- changed `create_xo.sh` script to create two memory banks for GACT-X
+- changed `create_GACTX.hw.sh` script to create two memory banks for GACT-X
+- added variables in host to support 2 kernels
+- set variables as global for multi-threading application
+- added encoding between Minimap2 and GACT-X nucleotide and CIGAR sequences
+- added tile algorithm
+- sepparated setup and cleanup for one-time call functions
+- sepparated host application for rife Minimap2 calls
 
 ## <a name="instructions"></a>Instructions
 
