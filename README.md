@@ -1,131 +1,163 @@
-# Adapting-the-GACT-X-Aligner-to-Accelerate-Minimap2-in-an-FPGA-Cloud-Instance
+# Darwin-WGA
+
+A co-processor for whole genome alignment.
 
 ## Table of Contents
 
-- [Methodology](#methodology)
-- [Adaptations](#adaptations)
-  - [Adaptations in Minimap2](#adaptations_in_minimap2)
-  - [Adaptations in GACT-X](#adaptations_in_gactx)
-- [Instructions](#instructions)
-- [Citing This Work](#citation_self)
-- [Citing Minimap2](#citation_Minimap2)
-- [Citing Darwin-WGA](#citation_Darwin_WGA)
+- [Getting Started](#started)
+- [Design Overview](#design)
+- [Building and Running tests](#test)
+    - [Steps for hardware emulation (MODE-hw_emu)](#hw_emu_test)
+    - [Steps for running on the EC2 F1 instance, f1.2xlarge (MODE-hw)](#hw_test)
+- [Citing Darwin-WGA](#citation)
 
-## <a name="methodology"></a>Methodology
+## <a name="started"></a>Getting Started
 
-Minimap2 is the State-of-the-Art tool for long-read assembly and runs entirely on software with SSE optimization (see reference on [Citing Minimap2](#citation_Minimap2)). GACT-X is an AWS cloud FPGA design for the SWG biological sequence alignment algorithm (see reference on [Citing Darwin-WGA](#citation_Darwin_WGA)). SWG is used in Minimap2 with SSE instructions. This work proposes a substitution of the `ksw_extd2_sse` function in Minimap2 for the GACT-X application for acceleration purposes. An integrated system was elaborated to support the multithreading (1 to 8) and multi-kernel (1 to 2) capacity of the f1.2xlarge instance. For more information, please check the reference in [Citing This Work](#citation_self).
+The system has been tested on AWS EC2 F1 instance, f1.2xlarge with AMI 1.4.0 (https://amzn.to/2zfsjCM and click on *Continue to Subscribe*).
 
-## <a name="adaptations"></a>Adaptations
+* Install dependencies
 
-### <a name="adaptations_in_minimap2"></a>Adaptations in Minimap2
-
-- added `CMakeLists.txt` to create a new MakeFile that compiles Minimap2 with the GACT-X host
-- added lines in `align.c` to call the GACT-X host and coordinate kernel availability and thread queue
-- added new file `gactx.cpp` to host GACT-X with setup, cleanup and application fucntions
-- changed to `main.cpp` and added line for GACT-X host variables
-
-### <a name="adaptations_in_gactx"></a>Adaptations in GACT-X
-
-- changed internal wire sizes to support tile size of 8000 in Verilog files
-- changed `create_xo.sh` script to generate only GACT-X
-- changed `create_xo.sh` script to VIVADO 2018.2
-- changed `create_xo.sh` script to create two memory banks for GACT-X
-- changed `create_GACTX.hw.sh` script to create two memory banks for GACT-X
-- added variables in host to support 2 kernels
-- set variables as global for multi-threading application
-- added encoding between Minimap2 and GACT-X nucleotide and CIGAR sequences
-- added tile algorithm
-- sepparated setup and cleanup for one-time call functions
-- sepparated host application for rife Minimap2 calls
-
-## <a name="instructions"></a>Instructions
-
-1. subscribe to FPGA Developer AMI
-2. configure to Software version 1.5.1 (Oct 22, 2020) and Region US West (Oregon) or any region with F1 instances
-3. launch on EC2 Instance Type f1.2xlarge
-4. create and configure security group/key (optional)
-5. modify EBS Volume to 100GB (optional but recommended for human data)
-6. connect using ssh (Linux) or Puttygen (Windows)
-7. extend partition to the volume increased
-8. create bucket to store and share AFI (optional)
-9. intall tmux for long runs (optional)
-```
-sudo yum -y install tmux
-```
-```
-tmux new -s Minimap2_GACTX
-```
-10. configure with root user keys (required)
-```
-aws configure
-```
-11. install libraries
-```
-sudo yum -y install cmake
-```
-```
-sudo yum -y install zlib-devel zlib-static
-```
-12. clone and commit to the AWS EC2 FPGA Hardware and Software Development Kit
-```
-git clone https://github.com/aws/aws-fpga.git
-```
-```
-cd aws-fpga && git checkout 2fa6b0672de67d46d1ae21147c2fbaadceb34207 && git checkout -b new_branch && cd ..
-```
-13. run setup
-```
-export AWS_DIR=$PWD/aws-fpga && source $AWS_DIR/sdaccel_setup.sh
-```
-14. clone Darwin-WGA
-```
-git clone https://github.com/gsneha26/Darwin-WGA.git
-```
-```
-export PROJECT_DIR=$PWD/Darwin-WGA && cd $PROJECT_DIR
-```
-15. create AFI
-```
-chmod 755 scripts/create_xo.sh && ./scripts/create_xo.sh
-```
-```
-chmod 755 scripts/create_GACTX.hw.sh && ./scripts/create_GACTX.hw.sh
-```
-16. save AFI to bucket
-```
-cd test_GACTX_hw && ../../aws-fpga/SDAccel/tools/create_sdaccel_afi.sh -xclbin=GACTX.hw.xclbin -o=GACTX.hw -s3_bucket=gactx -s3_dcp_key=dcp_folder -s3_logs_key=logs_folder
-```
-17. wait for FPGA to become available
-18. run setup
-```
-sudo sh
-```
-```
-aws configure
-```
-```
-export LD_LIBRARY_PATH=$XILINX_SDX/runtime/lib/x86_64/:$LD_LIBRARY_PATH && export XCL_EMULATION_MODE=hw && export VIVADO_TOOL_VERSION=2017.4 && source ../../aws-fpga/sdaccel_runtime_setup.sh
-```
-19. compile source
-```
-cmake -DCMAKE_BUILD_TYPE=Release -DAWS_PLATFORM=/home/centos/aws-fpga/SDAccel/aws_platform/xilinx_aws-vu9p-f1-04261818_dynamic_5_0/xilinx_aws-vu9p-f1-04261818_dynamic_5_0.xpfm -DXILINX_SDX=/opt/Xilinx/SDx/2017.4.op -DXILINX_VIVADO=/opt/Xilinx/Vivado/2017.4.op .
-```
-```
-make
-```
-20. run accelerated Minimap2
-```
-./minimap2_gactx -ax [technology] -t [threads] [reference file] [FASTQ file] > [SAM file]
+``` 
+    $ sudo yum install cmake
+    $ sudo yum install zlib-devel zlib-static
 ```
 
-## <a name="citation_self"></a>Citing This Work
+* Clone aws-fpga directory (https://github.com/aws/aws-fpga)
 
-:clock2: Work in reviewing phase.
+``` 
+    $ git clone https://github.com/aws/aws-fpga.git
+    $ export AWS_DIR=$PWD/aws-fpga
+    $ source $AWS_DIR/sdaccel_setup.sh
+```
 
-## <a name="citation_Minimap2"></a>Citing Minimap2
+* Clone Darwin-WGA repository (https://github.com/gsneha26/Darwin-WGA)
 
-> Li, H. Minimap2: pairwise alignment for nucleotide sequences. Bioinformatics 2018, 34, 3094–3100. https://doi.org/10.1093/bioinformatics/bty191.
+```
+    $ git clone https://github.com/gsneha26/Darwin-WGA.git
+    $ export PROJECT_DIR=$PWD/Darwin-WGA
+```
 
-## <a name="citation_Darwin_WGA"></a>Citing Darwin-WGA
+* Clone tbb package (https://github.com/01org/tbb) 
 
-> Turakhia, Y., Goenka, S. D., Bejerano, G., & Dally, W. J. (2019, February). Darwin-WGA: A co-processor provides increased sensitivity in whole genome alignments with high speedup. In 2019 IEEE International Symposium on High Performance Computer Architecture (HPCA) (pp. 359-372). IEEE.
+```
+    $ cd $PROJECT_DIR
+    $ git clone https://github.com/01org/tbb 
+```
+
+* Copy kseq.h from https://github.com/lh3/ksw2
+
+```
+    $ cd $PROJECT_DIR
+    $ wget https://github.com/lh3/ksw2/blob/master/kseq.h
+    $ mv kseq.h $PROJECT_DIR/src/host/WGA/
+```
+
+## <a name="design"></a> Design Overview
+As described in the paper, Darwin-WGA is based on the seed-filter-extend paradigm.
+
+![Alt text](hw_sw.png)
+
+As shown above, the implementation is divided between software and hardware (FPGA/ASIC). Seeding is done using D-SOFT algorithm in software. Filtering uses Banded Smith-Waterman (BSW) modules in FPGA. Extension used GACT-X modules in FPGA. BSW and GACT-X modules consist of individual tests
+
+The project consists of tests for individual BSW and GACT-X modules. The complete system is also tested under the module name WGA.
+
+## <a name="test"></a>Building and Running tests
+The process is described in detail in aws-fpga/SDAccel/README.md. The steps specific to this project are described below.
+
+* Package the hdl files into XO files. A new folder, *xclbin/* consists of all the .xo files required in the project.
+
+```
+    $ cd $PROJECT_DIR 
+    $ ./scripts/create_xo.sh 
+```
+
+### <a name="hw_emu_test"></a>Steps for hardware emulation (MODE-hw_emu)
+
+```
+  $ cd $PROJECT_DIR 
+  $ ./scripts/create_{BSW/GACTX/WGA}.hw_emu.sh
+  $ cd test_{BSW/GACTX/WGA}_hw_emu
+  $ export LD_LIBRARY_PATH=$XILINX_SDX/runtime/lib/x86_64/:$LD_LIBRARY_PATH
+  $ export XCL_EMULATION_MODE=hw_emu
+```
+
+Parameters for each module are specified in *params.cfg*. 
+
+#### <a name="bsw"></a>Banded Smith-Waterman (BSW)
+*ref.txt* and *query.txt* consist of the reference and query sequences. Each line in *parameters.txt* consist of a request specified as {request reference length, request query length, reference start address, query start address} 
+
+```
+  $ ./bsw BSW.hw_emu.xclbin {number of tiles as specified in parameters.txt}
+```
+
+In the current example,
+```
+  $ ./bsw BSW.hw_emu.xclbin 4
+```
+
+
+#### <a name="gactx"></a>GACT-X
+*ref.txt* and *query.txt* consist of the reference and query sequences. Each line in *parameters.txt* consist of a request specified as {request reference length, request query length, reference start address, query start address} 
+
+```
+  $ ./gactx GACTX.hw_emu.xclbin
+```
+
+#### <a name="darwin_wga"></a>Darwin-WGA
+Reference and Query sequences should be in the FASTA format and the path should be replaced in *params.cfg*. For the current example, the sequences are *$PROJECT_DIR/data/ce11.fa* and *$PROJECT_DIR/data/cb4.fa*.
+
+```
+  $ ./wga WGA.hw_emu.xclbin
+```
+
+### <a name="hw_test"></a>Steps for running on the EC2 F1 instance, f1.2xlarge (MODE-hw)
+
+```
+  $ cd $PROJECT_DIR 
+  $ ./scripts/create_{BSW/GACTX/WGA}.hw.sh
+  $ cd test_{BSW/GACTX/WGA}_hw
+  $ $SDACCEL_DIR/tools/create_sdaccel_afi.sh -xclbin={BSW/GACTX/WGA}.hw.xclbin \ 
+    -o=<{BSW/GACTX/WGA}.hw> -s3_bucket=<bucket-name> \
+    -s3_dcp_key=<dcp-folder-name> -s3_logs_key=<logs-folder-name>
+  $ export LD_LIBRARY_PATH=$XILINX_SDX/runtime/lib/x86_64/:$LD_LIBRARY_PATH
+  $ export XCL_EMULATION_MODE=hw
+  $ sudo sh
+    # source $AWS_DIR/sdaccel_runtime_setup.sh
+```
+
+#### <a name="bsw"></a>Banded Smith-Waterman (BSW)
+*ref.txt* and *query.txt* consist of the reference and query sequences. Each line in *parameters.txt* consist of a request specified as {request reference length, request query length, reference start address, query start address} 
+
+```
+  $ ./bsw BSW.hw_emu.xclbin {number of tiles as specified in parameters.txt}
+```
+
+In the current example,
+
+```
+    # ./bsw BSW.hw.awsxclbin 4
+```
+
+#### <a name="gactx"></a>GACT-X
+*ref.txt* and *query.txt* consist of the reference and query sequences. Each line in *parameters.txt* consist of a request specified as {request reference length, request query length, reference start address, query start address} 
+
+```
+    # ./gactx GACTX.hw.awsxclbin
+```
+
+#### <a name="darwin_wga"></a>Darwin-WGA
+Reference and Query sequences should be in the FASTA format and the path should be replaced in *params.cfg*. For the current example, the sequences are *$PROJECT_DIR/data/ce11.fa* and *$PROJECT_DIR/data/cb4.fa*.
+
+```
+    # ./wga WGA.hw.awsxclbin
+```
+
+## <a name="citation"></a>Citing Darwin-WGA
+* Seed-filter-extend algorithms and hardware for BSW and GACT-X described in: 
+
+  * Turakhia, Y., Goenka, S. D., Bejerano, G., & Dally, W. J. (2019, February). Darwin-WGA: A co-processor provides increased sensitivity in whole genome alignments with high speedup. In 2019 IEEE International Symposium on High Performance Computer Architecture (HPCA) (pp. 359-372). IEEE.
+
+
+* D-SOFT algorithm and hardware for GACT described in: 
+  
+  * Turakhia, Y., Bejerano, G., & Dally, W. J. (2018, March). Darwin: A genomics co-processor provides up to 15,000 x acceleration on long read assembly. In ACM SIGPLAN Notices (Vol. 53, No. 2, pp. 199-213). ACM.

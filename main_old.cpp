@@ -99,6 +99,9 @@ int load_file_to_memory(const char *filename, char **result){
 
 int main(int argc, char** argv){
 	
+	// Measure total execution time
+	//auto total_start = high_resolution_clock::now();
+	
     if (argc != 2) {
         printf("Usage: %s xclbin\n", argv[0]);
         return EXIT_FAILURE;
@@ -189,7 +192,7 @@ int main(int argc, char** argv){
     }
 	
     // Create a command commands
-	commands = clCreateCommandQueue(context, device_id, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err);
+	commands = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &err);
 	if (!commands) {
 		fprintf(stderr, "Error: Failed to create a command commands!\n");
 		fprintf(stderr, "Error: code %i\n",err);
@@ -231,20 +234,18 @@ int main(int argc, char** argv){
 	
     // Create the compute kernel in the program we wish to run
     std::string s0 = "GACTX_bank3";
+    std::string s1 = "GACTX_bank0";
 	kernel[0] = clCreateKernel(program, s0.c_str(), &err);
 	if (!kernel[0] || err != CL_SUCCESS) {
 		fprintf(stderr, "Error: Failed to create compute kernel!\n");
 		fprintf(stderr, "Test failed\n");
 		return EXIT_FAILURE;
 	}
-	if (NUM_KERNELS == 2){
-		std::string s1 = "GACTX_bank0";
-		kernel[1] = clCreateKernel(program, s1.c_str(), &err);
-		if (!kernel[1] || err != CL_SUCCESS) {
-			fprintf(stderr, "Error: Failed to create compute kernel!\n");
-			fprintf(stderr, "Test failed\n");
-			return EXIT_FAILURE;
-		}
+	kernel[1] = clCreateKernel(program, s1.c_str(), &err);
+	if (!kernel[1] || err != CL_SUCCESS) {
+		fprintf(stderr, "Error: Failed to create compute kernel!\n");
+		fprintf(stderr, "Test failed\n");
+		return EXIT_FAILURE;
 	}
 	
     // Create structs to define memory bank mapping
@@ -254,6 +255,7 @@ int main(int argc, char** argv){
     bank3_ext[0].flags = XCL_MEM_DDR_BANK3;
     bank3_ext[0].obj = NULL;
     bank3_ext[0].param = 0;
+	
 	if (NUM_KERNELS == 2){
 		bank3_ext[1].flags = XCL_MEM_DDR_BANK0;
 		bank3_ext[1].obj = NULL;
@@ -293,6 +295,8 @@ int main(int argc, char** argv){
 	bool kernel_expanding[2];
 	bool begin_tb;
 	
+	long long int kernel_transfer_duration[NUM_KERNELS];
+	
 	int r_len[NUM_KERNELS];
 	int q_len[NUM_KERNELS];
 	int ref_len[NUM_KERNELS];
@@ -314,27 +318,32 @@ int main(int argc, char** argv){
 	int align_fields = 0;
 	
 	int threshold = 0;
-	int max_lines = 420988; //simulated 420988 / ONT 458116 / PacBio 655008
+	int max_lines = 105247; //105247 number of inputs
 	
-	cl_event writereadevent;
+	cl_event writeevent1;
+	cl_event writeevent2;
+	cl_event writeevent3;
+	cl_event writeevent4;
+	cl_event readevent1;
+	cl_event readevent2;
 	
 	// Open input files
-	std::ifstream infile;
+	std::ifstream infile_ref;
+    std::ifstream infile_query;
 	std::ofstream CIGARs;
 	
-	infile.open ("right_extend_data_simulated.txt");
-	CIGARs.open ("gactx_data_simulated.txt");
+	infile_ref.open ("my_ref.txt");
+	infile_query.open ("my_query.txt");
+	CIGARs.open ("output.txt");
 	
 	// Separate buffer space for the sequences
-	int max_seq_len = 26000; //simulated 26000 / ONT 103000 / PacBio 33000
+	int max_seq_len = 25500;
 	std::string ref[NUM_KERNELS];
     std::string query[NUM_KERNELS];
-	std::string blank;
 	
 	cl_mem ref_seq[NUM_KERNELS];
 	cl_mem query_seq[NUM_KERNELS];
-	unsigned char*h_ref_seq_input_3[NUM_KERNELS];
-	unsigned char*h_query_seq_input_3[NUM_KERNELS];
+	
 	for (int b = 0; b < NUM_KERNELS;  b++) {
 		ref_seq[b] = clCreateBuffer(context,  CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX,  sizeof(char) * max_seq_len, &bank3_ext[b], NULL);
 		query_seq[b] = clCreateBuffer(context,  CL_MEM_READ_ONLY | CL_MEM_EXT_PTR_XILINX,  sizeof(char) * max_seq_len, &bank3_ext[b], NULL);
@@ -343,8 +352,15 @@ int main(int argc, char** argv){
 			printf("Test failed\n");
 			return EXIT_FAILURE;
 		}
-		h_ref_seq_input_3[b] = (unsigned char*)clEnqueueMapBuffer(commands, ref_seq[0], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
-		h_query_seq_input_3[b] = (unsigned char*)clEnqueueMapBuffer(commands, query_seq[0], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
+	}
+	
+	unsigned char*h_ref_seq_input_3 = (unsigned char*)clEnqueueMapBuffer(commands[0], ref_seq[0], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
+	unsigned char*h_query_seq_input_3 = (unsigned char*)clEnqueueMapBuffer(commands[0], query_seq[0], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
+	unsigned char*h_ref_seq_input_4;
+	unsigned char*h_query_seq_input_4;
+	if (NUM_KERNELS == 2){
+		h_ref_seq_input_4 = (unsigned char*)clEnqueueMapBuffer(commands[1], ref_seq[1], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
+		h_query_seq_input_4 = (unsigned char*)clEnqueueMapBuffer(commands[1], query_seq[1], CL_TRUE, CL_MAP_WRITE, 0, sizeof(char) * max_seq_len, 0, NULL, NULL, NULL);
 	}
 	
 	// Separate buffer space for the tiles
@@ -352,8 +368,7 @@ int main(int argc, char** argv){
 	
 	cl_mem tile_output[NUM_KERNELS];
 	cl_mem tb_output[NUM_KERNELS];
-	unsigned int*h_tile_output_3[NUM_KERNELS];
-	unsigned int*h_tb_output_3[NUM_KERNELS];
+	
 	for (int b = 0; b < NUM_KERNELS; b++) {
 		tile_output[b] = clCreateBuffer(context,  CL_MEM_READ_WRITE | CL_MEM_EXT_PTR_XILINX,  sizeof(int) * 16, &bank3_ext[b], NULL); //CL_MEM_EXT_PTR_XILINX
 		tb_output[b] = clCreateBuffer(context,  CL_MEM_READ_WRITE | CL_MEM_EXT_PTR_XILINX,  sizeof(int) * max_max_tb, &bank3_ext[b], NULL);
@@ -364,7 +379,16 @@ int main(int argc, char** argv){
 		}
 	}
 	
-	//auto total_start = high_resolution_clock::now();
+	unsigned int*h_tile_output_3 = (unsigned int*)clEnqueueMapBuffer(commands[0], tile_output[0], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * 16, 0, NULL, NULL, NULL);
+	unsigned int*h_tb_output_3 = (unsigned int*)clEnqueueMapBuffer(commands[0], tb_output[0], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * max_max_tb, 0, NULL, NULL, NULL);
+	unsigned int*h_tile_output_4;
+	unsigned int*h_tb_output_4;
+	if (NUM_KERNELS == 2){
+		h_tile_output_4 = (unsigned int*)clEnqueueMapBuffer(commands[1], tile_output[1], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * 16, 0, NULL, NULL, NULL);
+		h_tb_output_4 = (unsigned int*)clEnqueueMapBuffer(commands[1], tb_output[1], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * max_max_tb, 0, NULL, NULL, NULL);
+	}
+	
+	auto total_start = high_resolution_clock::now();
 	
 	// Process each line of input files
 	for (int line_index = 1; line_index <= max_lines; line_index++) {
@@ -387,29 +411,35 @@ int main(int argc, char** argv){
 		
 		// Get ref and query sequences
 		for (int b = 0; b < NUM_KERNELS; b++) {
-			getline(infile, ref[b]);
-			getline(infile, query[b]);
-			getline(infile, blank);
-			getline(infile, blank);
+			getline(infile_ref, ref[b]);
+			getline(infile_query, query[b]);
 			
 			r_len[b] = ref[b].length();
 			q_len[b] = query[b].length();
-			//cout << r_len[b] << " " << q_len[b] << endl;
-			line_index += b + 3;
+			
+			line_index += b;
 		}
 		
-		for (int b = 0; b < NUM_KERNELS; b++) {
-			for(int k = 0; k < r_len[b]; k++) h_ref_seq_input_3[b][k] = ref[b][k];
-			for(int k = 0; k < q_len[b]; k++) h_query_seq_input_3[b][k] = query[b][k];
+		for(int k = 0; k < r_len[0]; k++) h_ref_seq_input_3[k] = ref[0][k];
+		for(int k = 0; k < q_len[0]; k++) h_query_seq_input_3[k] = query[0][k];
+		if (NUM_KERNELS == 2){
+			for(int k = 0; k < r_len[1]; k++) h_ref_seq_input_4[k] = ref[1][k];
+			for(int k = 0; k < q_len[1]; k++) h_query_seq_input_4[k] = query[1][k];
 		}
 		
 		// Tansfer ref and query sequences onto the DRAM
 		err = 0;
-		err |= clEnqueueWriteBuffer(commands, ref_seq[0], CL_FALSE, 0, sizeof(char) * max_seq_len, h_ref_seq_input_3[0], 0, NULL, &writereadevent);
-		err |= clEnqueueWriteBuffer(commands, query_seq[0], CL_TRUE, 0, sizeof(char) * max_seq_len, h_query_seq_input_3[0], 1, &writereadevent, &writereadevent);
+		err |= clEnqueueWriteBuffer(commands[0], ref_seq[0], CL_TRUE, 0, sizeof(char) * max_seq_len, h_ref_seq_input_3, 0, NULL, &writeevent1);
+		clGetEventProfilingInfo(writeevent1,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start_time,NULL);
+		clGetEventProfilingInfo(writeevent1,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end_time,NULL);
+		kernel_transfer_duration[0] += (long long int) (end_time - start_time);
+		err |= clEnqueueWriteBuffer(commands[0], query_seq[0], CL_TRUE, 0, sizeof(char) * max_seq_len, h_query_seq_input_3, 0, NULL, &writeevent2);
+		clGetEventProfilingInfo(writeevent2,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start_time,NULL);
+		clGetEventProfilingInfo(writeevent2,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end_time,NULL);
+		kernel_transfer_duration[0] += (long long int) (end_time - start_time);
 		if ((NUM_KERNELS == 2) && (r_len[1] > 0) && (q_len[1] > 0)){
-			err |= clEnqueueWriteBuffer(commands, ref_seq[1], CL_FALSE, 0, sizeof(char) * max_seq_len, h_ref_seq_input_3[1], 1, &writereadevent, &writereadevent);
-			err |= clEnqueueWriteBuffer(commands, query_seq[1], CL_TRUE, 0, sizeof(char) * max_seq_len, h_query_seq_input_3[1], 1, &writereadevent, &writereadevent);
+			err |= clEnqueueWriteBuffer(commands[1], ref_seq[1], CL_TRUE, 0, sizeof(char) * max_seq_len, h_ref_seq_input_4, 0, NULL, &writeevent3);
+			err |= clEnqueueWriteBuffer(commands[1], query_seq[1], CL_TRUE, 0, sizeof(char) * max_seq_len, h_query_seq_input_4, 1, &writeevent3, &writeevent4);
 		}
 		if (err != CL_SUCCESS) {
 			printf("Error: Failed to write to source array h_ref_seq_input!\n");
@@ -429,7 +459,6 @@ int main(int argc, char** argv){
 		} else{
 			kernel_expanding[1] = false;
 		}
-		
 		std::string CIGAR[NUM_KERNELS];
 		for (int b = 0; b < NUM_KERNELS; b++) {
 			CIGAR[b] = "";
@@ -442,10 +471,38 @@ int main(int argc, char** argv){
 				ref_len[0] = std::min(tile_size, r_len[0] - ref_offset[0]);
 				query_len[0] = std::min(tile_size, q_len[0] - query_offset[0]);
 			}
-			if (kernel_expanding[1]){
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
 				ref_len[1] = std::min(tile_size, r_len[1] - ref_offset[1]);
 				query_len[1] = std::min(tile_size, q_len[1] - query_offset[1]);
 			}
+			
+			/*// Fill output space with pattern
+			if (kernel_expanding[0]){
+				for(int i = 0; i < 16; i++) h_tile_output_3[i] = 0; 
+				for(int i = 0; i < max_max_tb; i++) h_tb_output_3[i]  = 33;
+			}
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				for(int i = 0; i < 16; i++) h_tile_output_4[i] = 0; 
+				for(int i = 0; i < max_max_tb; i++) h_tb_output_4[i]  = 33;
+			}
+			
+			// Tansfer output data onto the DRAM
+			err = 0;
+			if (kernel_expanding[0]){
+				err |= clEnqueueWriteBuffer(commands[0], tile_output[0], CL_TRUE, 0, sizeof(int) * 16, h_tile_output_3, 0, NULL, &writeevent1);
+				err |= clEnqueueWriteBuffer(commands[0], tb_output[0], CL_TRUE, 0, sizeof(int) * max_max_tb, h_tb_output_3, 1, &writeevent1, &writeevent2);
+				clWaitForEvents(1, &writeevent2);
+			}
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				err |= clEnqueueWriteBuffer(commands[1], tile_output[1], CL_TRUE, 0, sizeof(int) * 16, h_tile_output_4, 0, NULL, &writeevent3);
+				err |= clEnqueueWriteBuffer(commands[1], tb_output[1], CL_TRUE, 0, sizeof(int) * max_max_tb, h_tb_output_4, 1, &writeevent3, &writeevent4);
+				clWaitForEvents(1, &writeevent4);
+			}
+			if (err != CL_SUCCESS) {
+				printf("Error: Failed to write to source array h_tb_output_input!\n");
+				printf("Test failed\n");
+				return EXIT_FAILURE;
+			}*/
 			
 			// Set the arguments to our compute kernel
 			err = 0;
@@ -466,7 +523,7 @@ int main(int argc, char** argv){
 				err |= clSetKernelArg(kernel[0], 21, sizeof(cl_mem),   &tile_output[0]);
 				err |= clSetKernelArg(kernel[0], 22, sizeof(cl_mem),   &tb_output[0]);
 			}
-			if (kernel_expanding[1]){
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
 				for (int i = 0; i < 11; i++) {                                                               
 					err |= clSetKernelArg(kernel[1], i, sizeof(int), &cfg.sub_mat[i]);
 				}
@@ -493,12 +550,17 @@ int main(int argc, char** argv){
 			// using the maximum number of work group items for this device
 			err = 0;
 			if (kernel_expanding[0]){
-				err |= clEnqueueTask(commands, kernel[0], 0, NULL, NULL);
+				err |= clEnqueueTask(commands[0], kernel[0], 0, NULL, NULL);
 			}
-			if (kernel_expanding[1]){
-				err |= clEnqueueTask(commands, kernel[1], 0, NULL, NULL);
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				err |= clEnqueueTask(commands[1], kernel[1], 0, NULL, NULL);
 			}
-			clFinish(commands);
+			if (kernel_expanding[0]){
+				clFinish(commands[0]);
+			}
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				clFinish(commands[1]);
+			}
 			if (err) {
 				printf("Error: Failed to execute kernel! %d\n", err);
 				printf("Test failed\n");
@@ -508,12 +570,18 @@ int main(int argc, char** argv){
 			// Read back the results from the device
 			err = 0;
 			if (kernel_expanding[0]){
-				h_tile_output_3[0] = (unsigned int*)clEnqueueMapBuffer(commands, tile_output[0], CL_FALSE, CL_MAP_READ, 0, sizeof(int) * 16, 1, &writereadevent, &writereadevent, &err);
-				h_tb_output_3[0] = (unsigned int*)clEnqueueMapBuffer(commands, tb_output[0], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * max_max_tb, 1, &writereadevent, &writereadevent, &err);
+				err |= clEnqueueReadBuffer( commands[0], tile_output[0], CL_TRUE, 0, sizeof(int) * 16, h_tile_output_3, 0, NULL, &readevent1);
+				clGetEventProfilingInfo(readevent1,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start_time,NULL);
+				clGetEventProfilingInfo(readevent1,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end_time,NULL);
+				kernel_transfer_duration[0] += (long long int) (end_time - start_time);
+				err |= clEnqueueReadBuffer( commands[0], tb_output[0], CL_TRUE, 0, sizeof(int) * max_max_tb, h_tb_output_3, 0, NULL, &readevent2);
+				clGetEventProfilingInfo(readevent2,CL_PROFILING_COMMAND_START,sizeof(cl_ulong),&start_time,NULL);
+				clGetEventProfilingInfo(readevent2,CL_PROFILING_COMMAND_END,sizeof(cl_ulong),&end_time,NULL);
+				kernel_transfer_duration[0] += (long long int) (end_time - start_time);
 			}
-			if (kernel_expanding[1]){
-				h_tile_output_3[1] = (unsigned int*)clEnqueueMapBuffer(commands, tile_output[1], CL_FALSE, CL_MAP_READ, 0, sizeof(int) * 16, 1, &writereadevent, &writereadevent, &err);
-				h_tb_output_3[1] = (unsigned int*)clEnqueueMapBuffer(commands, tb_output[1], CL_TRUE, CL_MAP_READ, 0, sizeof(int) * max_max_tb, 1, &writereadevent, &writereadevent, &err);
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				err |= clEnqueueReadBuffer( commands[1], tile_output[1], CL_TRUE, 0, sizeof(int) * 16, h_tile_output_4, 0, NULL, &readevent1);
+				err |= clEnqueueReadBuffer( commands[1], tb_output[1], CL_TRUE, 0, sizeof(int) * max_max_tb, h_tb_output_4, 1, &readevent1, &readevent2);
 			}
 			if (err != CL_SUCCESS) {
 				printf("Error: Failed to read output array! %d\n", err);
@@ -523,16 +591,16 @@ int main(int argc, char** argv){
 			
 			// Retrieve tile results
 			if (kernel_expanding[0]){
-				score[0] = h_tile_output_3[0][0];
-				ref_pos[0] = h_tile_output_3[0][1];
-				query_pos[0] = h_tile_output_3[0][2];
-				num_tb[0] = h_tile_output_3[0][5]*16;
+				score[0] = h_tile_output_3[0];
+				ref_pos[0] = h_tile_output_3[1];
+				query_pos[0] = h_tile_output_3[2];
+				num_tb[0] = h_tile_output_3[5]*16;
 			}
-			if (kernel_expanding[1]){
-				score[1] = h_tile_output_3[1][0];
-				ref_pos[1] = h_tile_output_3[1][1];
-				query_pos[1] = h_tile_output_3[1][2];
-				num_tb[1] = h_tile_output_3[1][5]*16;
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
+				score[1] = h_tile_output_4[0];
+				ref_pos[1] = h_tile_output_4[1];
+				query_pos[1] = h_tile_output_4[2];
+				num_tb[1] = h_tile_output_4[5]*16;
 			}
 			
 			std::string tile_CIGAR[NUM_KERNELS];
@@ -549,7 +617,7 @@ int main(int argc, char** argv){
 				num_q_bases = 0;
 				//Backwards traceback starts when on overlap border
 				for (int i = 0; i < num_tb[0]; i++) {
-					uint32_t tb_ptr = h_tb_output_3[0][i];
+					uint32_t tb_ptr = h_tb_output_3[i];
 					for(int j = 0; j < 16; j++){
 						int dir = ((tb_ptr >> (2*j)) & TB_MASK);
 						switch(dir) {
@@ -600,7 +668,7 @@ int main(int argc, char** argv){
 					kernel_expanding[0] = false;
 			}
 			
-			if (kernel_expanding[1]){
+			if ((NUM_KERNELS == 2) && (kernel_expanding[1]) && (r_len[1] > 0) && (q_len[1] > 0)){
 				tb_pos = 0;
 				begin_tb = false;
 				rp = ref_offset[1] + ref_pos[1];
@@ -609,7 +677,7 @@ int main(int argc, char** argv){
 				num_q_bases = 0;
 				//Backwards traceback starts when on overlap border
 				for (int i = 0; i < num_tb[1]; i++) {
-					uint32_t tb_ptr = h_tb_output_3[1][i];
+					uint32_t tb_ptr = h_tb_output_4[i];
 					for(int j = 0; j < 16; j++){
 						int dir = ((tb_ptr >> (2*j)) & TB_MASK);
 						switch(dir) {
@@ -674,27 +742,40 @@ int main(int argc, char** argv){
 		}
 		
 	}
-	cout << endl;
+	
 	// Print total execution time
-	/*auto total_stop = high_resolution_clock::now();
+	auto total_stop = high_resolution_clock::now();
 	auto duration = duration_cast<microseconds>(total_stop - total_start);
 	cout << endl;
-	cout << "Total execution time: " << duration.count() << " microseconds" << endl;*/
+	cout << "Total execution time: " << duration.count() << " microseconds" << endl;
+	
+	for (int b = 0; b < NUM_KERNELS; b++)
+		cout << kernel_transfer_duration[b] << " ";
+	cout << endl;
 	
     //////////////////////////////////////////////////////////////////////////
     // Shutdown and Cleanup													//
     //////////////////////////////////////////////////////////////////////////
-	infile.close();
+    
+	infile_ref.close();
+	infile_query.close();
 	CIGARs.close();
 	
+	clReleaseMemObject(ref_seq[0]);
+	clReleaseMemObject(query_seq[0]);
+	clReleaseMemObject(tile_output[0]);
+	clReleaseMemObject(tb_output[0]);
 	clReleaseProgram(program);
-    clReleaseCommandQueue(commands);
+    clReleaseKernel(kernel[0]);
+    clReleaseCommandQueue(commands[0]);
     clReleaseContext(context);
-	for (int b = 0; b < NUM_KERNELS; b++) {
-		clReleaseMemObject(ref_seq[b]);
-		clReleaseMemObject(query_seq[b]);
-		clReleaseMemObject(tile_output[b]);
-		clReleaseMemObject(tb_output[b]);
-		clReleaseKernel(kernel[b]);
+	
+	if ((NUM_KERNELS == 2) && (r_len[1] > 0) && (q_len[1] > 0)){
+		clReleaseMemObject(ref_seq[1]);
+		clReleaseMemObject(query_seq[1]);
+		clReleaseMemObject(tile_output[1]);
+		clReleaseMemObject(tb_output[1]);
+		clReleaseKernel(kernel[1]);
+		clReleaseCommandQueue(commands[1]);
 	}
 }
